@@ -23,3 +23,13 @@ header.topbar a { color:#93c5fd !important; }
 .card.failed { background:#f87171 !important; color:#ffffff !important; }
 
 
+
+spring.thymeleaf.cache=false
+spring.web.resources.chain.cache=false
+spring.web.resources.cache.period=0
+spring.web.resources.cache.use-last-modified=true
+spring.web.resources.cache.cachecontrol.no-store=true
+spring.web.resources.cache.cachecontrol.no-cache=true
+spring.web.resources.cache.cachecontrol.must-revalidate=true
+spring.mvc.pathmatch.matching-strategy=ant_path_matcher
+
