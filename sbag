@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html data-theme="dark" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8" />
+    <title>Enrollment Dashboard</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css" />
+    <link rel="stylesheet" href="/app.css?v=1" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/themes/dark.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:," />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body{padding:0;background:#0b1220;color:#e5e7eb;}
+        header.topbar{background:#0f172a;color:#fff;padding:0.75rem 1rem;display:flex;align-items:center;justify-content:space-between}
+        header.topbar strong{font-size:2rem}
+        header.topbar a{color:#93c5fd;text-decoration:none;margin-left:1rem}
+        main.container{padding:1rem; overflow-x:auto;}
+        table{width:100%;}
+        table, thead, tbody, tr{background:transparent}
+        table th, table td{border-color:#334155}
+        canvas{max-height:360px;}
+        .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+        .card{border-radius:8px;padding:12px;color:#fff}
+        .started{background:#64748b}
+        .processing{background:#af7b50}
+        .completed{background:#6a9379}
+        .failed{background:#c27f7f}
+        .grid-actions{display:flex;gap:8px;align-items:end}
+        /* Align filter row */
+        .filter-row{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap}
+        .filter-row label{margin:0}
+        .filter-row input{min-width:180px}
+        .filter-row .form-actions{display:flex;gap:8px;align-items:center}
+        .hscroll{overflow-x:auto; -webkit-overflow-scrolling:touch}
+        table.wide{min-width:900px}
+    </style>
+</head>
+<body>
+<header class="topbar">
+    <strong> Dashboard</strong>
+    <nav>
+        <a href="/">New</a>
+        <a href="/import">Import</a>
+        <a href="/dashboard">Dashboard</a>
+        <a href="/status-report">Status Report</a>
+    </nav>
+</header>
+<div class="header-bar"></div>
+
+<main class="container">
+    <form method="get" action="/dashboard">
+        <div class="filter-row">
+            <label>From
+                <input id="fromDate" type="text" name="from" th:value="${fromStr}" />
+            </label>
+            <label>To
+                <input id="toDate" type="text" name="to" th:value="${toStr}" />
+            </label>
+            <div class="form-actions">
+                <button type="submit">Apply</button>
+                <button type="button" id="refreshBtn" class="secondary">Refresh</button>
+            </div>
+        </div>
+    </form>
+
+    <section>
+        <h3>Status Summary</h3>
+        <div class="cards">
+            <article class="card started">Started: <strong th:text="${statusCounts['STARTED']} ?: 0">0</strong></article>
+            <article class="card processing">Processing: <strong th:text="${statusCounts['PROCESSING']} ?: 0">0</strong></article>
+            <article class="card completed">Completed: <strong th:text="${statusCounts['COMPLETED']} ?: 0">0</strong></article>
+            <article class="card failed">Failed: <strong th:text="${statusCounts['FAILED']} ?: 0">0</strong></article>
+        </div>
+    </section>
+
+    <section>
+        <h3>Trends</h3>
+        <div class="grid">
+            <div>
+                <h5>Enrollments per Day</h5>
+                <canvas id="perDayChart"></canvas>
+            </div>
+            <div>
+                <h5>Status Distribution</h5>
+                <canvas id="statusChart"></canvas>
+            </div>
+        </div>
+    </section>
+
+    <section>
+        <h3>Top Users</h3>
+        <div class="hscroll">
+            <table role="grid" class="wide">
+                <thead>
+                <tr><th>User ID</th><th>Environment</th><th>Count</th></tr>
+                </thead>
+                <tbody>
+                <tr th:each="row : ${userCounts}">
+                    <td th:text="${row[0]}"></td>
+                    <td th:text="${row[1]}"></td>
+                    <td th:text="${row[2]}"></td>
+                </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <footer>
+        <a href="/">Create New Enrollment</a> · <a href="/import">Import CSV</a>
+    </footer>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+<script th:inline="javascript">
+/*<![CDATA[*/
+const perDayLabels = [[${perDayLabels}]];
+const perDayCounts = [[${perDayCounts}]];
+const statusLabels = [[${statusLabels}]];
+const statusValues = [[${statusValues}]];
+
+// Dark mode defaults for charts
+Chart.defaults.color = '#e5e7eb';
+Chart.defaults.borderColor = 'rgba(148,163,184,0.25)';
+
+const ctx = document.getElementById('perDayChart');
+const chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+        labels: perDayLabels,
+        datasets: [{
+            label: 'Enrollments',
+            data: perDayCounts,
+            fill: false,
+            borderColor: 'rgb(75, 192, 192)',
+            tension: 0.1
+        }]
+    },
+    options: {
+        scales: {
+            y: { beginAtZero: true, grid: { color: 'rgba(148,163,184,0.15)' } },
+            x: { grid: { color: 'rgba(148,163,184,0.10)' } }
+        }
+    }
+});
+
+const sc = document.getElementById('statusChart');
+const statusChart = new Chart(sc, {
+    type: 'doughnut',
+    data: {
+        labels: statusLabels,
+        datasets: [{
+            label: 'Status',
+            data: statusValues,
+            backgroundColor: ['#64748b','#fb923c','#22c55e','#ef4444']
+        }]
+    }
+});
+
+// Initialize flatpickr for robust cross-browser date picking
+const defaultFrom = '[[${fromStr}]]';
+const defaultTo = '[[${toStr}]]';
+flatpickr('#fromDate', { dateFormat: 'Y-m-d', defaultDate: defaultFrom || new Date(), maxDate: 'today', allowInput: true });
+flatpickr('#toDate', { dateFormat: 'Y-m-d', defaultDate: defaultTo || new Date(), maxDate: 'today', allowInput: true });
+
+// Refresh button reloads dashboard with current date values
+document.getElementById('refreshBtn')?.addEventListener('click', function () {
+    const fromVal = document.getElementById('fromDate')?.value;
+    const toVal = document.getElementById('toDate')?.value;
+    const url = new URL(window.location.href);
+    if (fromVal) url.searchParams.set('from', fromVal);
+    if (toVal) url.searchParams.set('to', toVal);
+    window.location.href = url.toString();
+});
+/*]]>*/
+</script>
+</body>
+</html>
+
+
