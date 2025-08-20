@@ -1,0 +1,130 @@
+package com.example.dashboard.web;
+
+import com.example.dashboard.enrollment.Enrollment;
+import com.example.dashboard.enrollment.EnrollmentService;
+import jakarta.validation.Valid;
+import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.stereotype.Controller;
+import org.springframework.ui.Model;
+import org.springframework.validation.BindingResult;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.ModelAttribute;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.List;
+import java.util.Map;
+
+@Controller
+public class EnrollmentController {
+
+    private final EnrollmentService service;
+
+    public EnrollmentController(EnrollmentService service) {
+        this.service = service;
+    }
+
+    @GetMapping("/")
+    public String index(Model model) {
+        model.addAttribute("enrollment", new Enrollment());
+        return "enroll";
+    }
+
+    @PostMapping("/enroll")
+    public String submit(@Valid @ModelAttribute("enrollment") Enrollment enrollment,
+                         BindingResult bindingResult,
+                         Model model) {
+        if (bindingResult.hasErrors()) {
+            return "enroll";
+        }
+        service.save(enrollment);
+        model.addAttribute("success", true);
+        model.addAttribute("enrollment", new Enrollment());
+        return "enroll";
+    }
+
+    @GetMapping("/dashboard")
+    public String dashboard(@RequestParam(value = "from", required = false)
+                                @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+                            @RequestParam(value = "to", required = false)
+                                @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+                            Model model) {
+        LocalDate effectiveFrom = (from != null) ? from : LocalDate.now();
+        LocalDate effectiveTo = (to != null) ? to : LocalDate.now();
+
+        Map<String, Long> statusCounts = service.statusCounts(effectiveFrom, effectiveTo);
+        List<Object[]> userCounts = service.userCounts(effectiveFrom, effectiveTo);
+        List<Object[]> perDay = service.countsPerDay(effectiveFrom, effectiveTo);
+
+        // Prepare chart-friendly lists to avoid complex expressions in the template
+        java.util.List<String> perDayLabels = new java.util.ArrayList<>();
+        java.util.List<Long> perDayCounts = new java.util.ArrayList<>();
+        for (Object[] row : perDay) {
+            perDayLabels.add(String.valueOf(row[0]));
+            perDayCounts.add(((Number) row[1]).longValue());
+        }
+
+        // Prepare status distribution for a chart
+        java.util.List<String> statusLabels = java.util.List.of("STARTED", "PROCESSING", "COMPLETED", "FAILED");
+        java.util.List<Long> statusValues = new java.util.ArrayList<>();
+        for (String label : statusLabels) {
+            statusValues.add(statusCounts.getOrDefault(label, 0L));
+        }
+
+        model.addAttribute("statusCounts", statusCounts);
+        model.addAttribute("userCounts", userCounts);
+        model.addAttribute("perDayLabels", perDayLabels);
+        model.addAttribute("perDayCounts", perDayCounts);
+        model.addAttribute("statusLabels", statusLabels);
+        model.addAttribute("statusValues", statusValues);
+        model.addAttribute("from", effectiveFrom);
+        model.addAttribute("to", effectiveTo);
+        DateTimeFormatter df = DateTimeFormatter.ISO_DATE;
+        model.addAttribute("fromStr", df.format(effectiveFrom));
+        model.addAttribute("toStr", df.format(effectiveTo));
+        return "dashboard";
+    }
+
+    @GetMapping("/admin/seed/jan3")
+    public String addJan3Record() {
+        Enrollment e = new Enrollment();
+        e.setEnrollmentType("NEW");
+        e.setState("CA");
+        e.setCountry("USA");
+        e.setCity("San Jose");
+        e.setZip("95110");
+        e.setUserId("seed-user");
+        e.setEnvironment("PROD");
+        e.setGender("F");
+        e.setSubscriberAge(35);
+        e.setSpouseAge(34);
+        e.setChildAge(5);
+        e.setStatus(Enrollment.Status.COMPLETED);
+        e.setCreatedAt(LocalDateTime.of(2025, 1, 3, 10, 0));
+        service.save(e);
+        return "redirect:/dashboard";
+    }
+
+    @GetMapping("/status-report")
+    public String statusReport(@RequestParam(value = "status", required = false) Enrollment.Status status,
+                               @RequestParam(value = "from", required = false)
+                                   @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+                               @RequestParam(value = "to", required = false)
+                                   @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+                               Model model) {
+        LocalDate effectiveFrom = (from != null) ? from : LocalDate.now();
+        LocalDate effectiveTo = (to != null) ? to : LocalDate.now();
+        var results = service.search(status, effectiveFrom, effectiveTo);
+        DateTimeFormatter df = DateTimeFormatter.ISO_DATE;
+        model.addAttribute("fromStr", df.format(effectiveFrom));
+        model.addAttribute("toStr", df.format(effectiveTo));
+        model.addAttribute("status", status);
+        model.addAttribute("rows", results);
+        return "status-report";
+    }
+}
+
+
