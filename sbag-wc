@@ -1,0 +1,157 @@
+package com.example.service;
+
+import com.example.dto.ExternalApiRequest;
+import com.example.dto.ExternalApiResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.stereotype.Service;
+import org.springframework.web.reactive.function.client.ExchangeFilterFunction;
+import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
+import reactor.core.publisher.Mono;
+import reactor.util.retry.Retry;
+
+import java.time.Duration;
+
+/**
+ * Dedicated HTTP client service using WebClient for external API communication.
+ * 
+ * Design Principles Applied:
+ * 1. Single Responsibility: Handles only HTTP communication
+ * 2. Configuration Externalization: Uses properties for configuration
+ * 3. Error Handling: Comprehensive error handling with fallbacks
+ * 4. Retry Logic: Implements exponential backoff retry strategy
+ * 5. Timeout Management: Configurable timeouts for different scenarios
+ * 6. Logging: Structured logging for monitoring and debugging
+ * 7. Reactive Programming: Non-blocking, asynchronous operations
+ */
+@Service
+public class HttpClientService {
+
+    private static final Logger logger = LoggerFactory.getLogger(HttpClientService.class);
+
+    private final WebClient webClient;
+    
+    // Constants to avoid magic numbers
+    private static final int DEFAULT_TIMEOUT_MS = 5000;
+    private static final int DEFAULT_RETRY_ATTEMPTS = 3;
+    private static final int DEFAULT_INITIAL_DELAY_MS = 1000;
+    private static final int MAX_MEMORY_SIZE_BYTES = 2 * 1024 * 1024; // 2MB
+    
+    @Value("${app.external.api.url:https://api.example.com/user-request}")
+    private String externalApiUrl;
+    
+    @Value("${app.external.api.timeout:" + DEFAULT_TIMEOUT_MS + "}")
+    private int timeoutMs;
+    
+    @Value("${app.external.api.retry.max-attempts:" + DEFAULT_RETRY_ATTEMPTS + "}")
+    private int maxRetryAttempts;
+    
+    @Value("${app.external.api.retry.initial-delay:" + DEFAULT_INITIAL_DELAY_MS + "}")
+    private int initialDelayMs;
+
+    public HttpClientService(WebClient.Builder webClientBuilder) {
+        this.webClient = webClientBuilder
+                .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                .defaultHeader(HttpHeaders.USER_AGENT, "UserAddressService/1.0")
+                .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(MAX_MEMORY_SIZE_BYTES))
+                .filter(ExchangeFilterFunction.ofRequestProcessor(
+                    clientRequest -> {
+                        logger.debug("External API Request: {} {}", clientRequest.method(), clientRequest.url());
+                        return Mono.just(clientRequest);
+                    }
+                ))
+                .build();
+    }
+
+    /**
+     * Send user request to external API asynchronously
+     * 
+     * @param request the external API request
+     * @return Mono<ExternalApiResponse> representing the external API response
+     */
+    public Mono<ExternalApiResponse> sendUserRequestAsync(ExternalApiRequest request) {
+        logger.info("Sending user request to external API for userId: {}", request.getUserId());
+        
+        return webClient.post()
+                .uri(externalApiUrl)
+                .bodyValue(request)
+                .retrieve()
+                .bodyToMono(ExternalApiResponse.class)
+                .timeout(Duration.ofMillis(timeoutMs))
+                .retryWhen(createRetryStrategy())
+                .doOnSuccess(response -> 
+                    logger.info("External API call successful for userId: {}, response: {}", 
+                        request.getUserId(), response))
+                .doOnError(error -> 
+                    logger.error("External API call failed for userId: {}", 
+                        request.getUserId(), error))
+                .doOnNext(response -> 
+                    logger.info("External API response received for userId: {}, status: {}", 
+                        request.getUserId(), response.getStatus()))
+                .onErrorResume(this::handleError);
+    }
+
+    /**
+     * Create retry strategy with exponential backoff
+     */
+    private Retry createRetryStrategy() {
+        return Retry.backoff(maxRetryAttempts, Duration.ofMillis(initialDelayMs))
+                .filter(this::isRetryableError)
+                .doBeforeRetry(retrySignal -> 
+                    logger.warn("Retrying external API call, attempt: {}, error: {}", 
+                        retrySignal.totalRetries() + 1, 
+                        retrySignal.failure().getMessage()));
+    }
+
+    /**
+     * Determine if an error is retryable
+     */
+    private boolean isRetryableError(Throwable error) {
+        if (error instanceof WebClientResponseException) {
+            WebClientResponseException webClientError = (WebClientResponseException) error;
+            int statusCode = webClientError.getStatusCode().value();
+            
+            // Retry on 5xx server errors and 429 (rate limit)
+            return statusCode >= 500 || statusCode == 429;
+        }
+        
+        // Retry on network/timeout errors
+        return error instanceof java.net.SocketTimeoutException ||
+               error instanceof java.net.ConnectException ||
+               error instanceof java.util.concurrent.TimeoutException;
+    }
+
+    /**
+     * Handle errors gracefully without failing the main operation
+     */
+    private Mono<ExternalApiResponse> handleError(Throwable error) {
+        if (error instanceof WebClientResponseException) {
+            WebClientResponseException webClientError = (WebClientResponseException) error;
+            logger.error("External API returned error status: {} - {}", 
+                webClientError.getStatusCode(), webClientError.getResponseBodyAsString());
+        } else {
+            logger.error("External API call failed with unexpected error", error);
+        }
+        
+        // Return empty Mono to indicate completion (even with error)
+        // This prevents the error from propagating and affecting the main flow
+        return Mono.empty();
+    }
+
+    /**
+     * Health check for external API
+     */
+    public Mono<Boolean> checkExternalApiHealth() {
+        return webClient.get()
+                .uri(externalApiUrl + "/health")
+                .retrieve()
+                .toBodilessEntity()
+                .map(response -> true)
+                .timeout(Duration.ofMillis(timeoutMs))
+                .onErrorReturn(false);
+    }
+}
