@@ -1,0 +1,30 @@
+@Async
+    public void invokeExternalUserRequestAPIAsync(User user) {
+        logger.info("Starting asynchronous external API call for user ID: {}", user.getId());
+        
+        // Update status to IN_PROGRESS
+        updateExternalApiStatus(user.getId(), ExternalApiStatus.IN_PROGRESS, "External API call initiated", "Call initiated");
+        
+        // Create external API request
+        ExternalApiRequest request = new ExternalApiRequest(
+            user.getId(),
+            user.getName(),
+            user.getEmail(),
+            user.getAddress()
+        );
+        
+        // Send request using HttpClientService (non-blocking)
+        httpClientService.sendUserRequestAsync(request)
+            .subscribe(
+                response -> {
+                    logger.info("External API call completed successfully for user ID: {}", user.getId());
+                    String responseData = response != null ? response.toString() : "Response received but no data";
+                    updateExternalApiStatus(user.getId(), ExternalApiStatus.SUCCESS, "External API call successful", responseData);
+                },
+                error -> {
+                    logger.error("External API call failed for user ID: {}", user.getId(), error);
+                    String errorData = error != null ? error.toString() : "Unknown error";
+                    updateExternalApiStatus(user.getId(), ExternalApiStatus.FAILED, "External API call failed: " + error.getMessage(), errorData);
+                }
+            );
+    }
