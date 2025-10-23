@@ -1,0 +1,375 @@
+package com.example.dashboard.web;
+
+import com.example.dashboard.enrollment.Enrollment;
+import com.example.dashboard.enrollment.EnrollmentService;
+import jakarta.validation.Valid;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.stereotype.Controller;
+import org.springframework.ui.Model;
+import org.springframework.validation.BindingResult;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.ModelAttribute;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.PathVariable;
+
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import org.apache.poi.ss.usermodel.*;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import java.util.List;
+import java.util.Map;
+
+@Controller
+public class EnrollmentController {
+
+    private final EnrollmentService service;
+
+    public EnrollmentController(EnrollmentService service) {
+        this.service = service;
+    }
+
+    @GetMapping("/")
+    public String index(Model model) {
+        model.addAttribute("enrollment", new Enrollment());
+        return "enroll";
+    }
+
+    @PostMapping("/enroll")
+    public String submit(@Valid @ModelAttribute("enrollment") Enrollment enrollment,
+                         BindingResult bindingResult,
+                         Model model) {
+        if (bindingResult.hasErrors()) {
+            return "enroll";
+        }
+        service.save(enrollment);
+        model.addAttribute("success", true);
+        model.addAttribute("enrollment", new Enrollment());
+        return "enroll";
+    }
+
+    @GetMapping("/dashboard")
+    public String dashboard(@RequestParam(value = "from", required = false)
+                                @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+                            @RequestParam(value = "to", required = false)
+                                @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+                            Model model) {
+        LocalDate effectiveFrom = (from != null) ? from : LocalDate.now().minusDays(90);
+        LocalDate effectiveTo = (to != null) ? to : LocalDate.now();
+
+        Map<String, Long> statusCounts = service.statusCounts(effectiveFrom, effectiveTo);
+        List<Object[]> userCounts = service.userCounts(effectiveFrom, effectiveTo);
+        List<Object[]> perDay = service.countsPerDay(effectiveFrom, effectiveTo);
+
+        // Prepare chart-friendly lists to avoid complex expressions in the template
+        java.util.List<String> perDayLabels = new java.util.ArrayList<>();
+        java.util.List<Long> perDayCounts = new java.util.ArrayList<>();
+        for (Object[] row : perDay) {
+            perDayLabels.add(String.valueOf(row[0]));
+            perDayCounts.add(((Number) row[1]).longValue());
+        }
+
+        // Prepare status distribution for a chart
+        java.util.List<String> statusLabels = java.util.List.of("STARTED", "PROCESSING", "COMPLETED", "FAILED");
+        java.util.List<Long> statusValues = new java.util.ArrayList<>();
+        for (String label : statusLabels) {
+            statusValues.add(statusCounts.getOrDefault(label, 0L));
+        }
+
+        model.addAttribute("statusCounts", statusCounts);
+        model.addAttribute("userCounts", userCounts);
+        model.addAttribute("perDayLabels", perDayLabels);
+        model.addAttribute("perDayCounts", perDayCounts);
+        model.addAttribute("statusLabels", statusLabels);
+        model.addAttribute("statusValues", statusValues);
+        model.addAttribute("from", effectiveFrom);
+        model.addAttribute("to", effectiveTo);
+        DateTimeFormatter df = DateTimeFormatter.ISO_DATE;
+        model.addAttribute("fromStr", df.format(effectiveFrom));
+        model.addAttribute("toStr", df.format(effectiveTo));
+        return "dashboard";
+    }
+
+    @GetMapping("/admin/seed/jan3")
+    public String addJan3Record() {
+        Enrollment e = new Enrollment();
+        e.setEnrollmentType("NEW");
+        e.setState("CA");
+        e.setCountry("USA");
+        e.setCity("San Jose");
+        e.setZip("95110");
+        e.setUserId("seed-user");
+        e.setEnvironment("PROD");
+        e.setGender("F");
+        e.setSubscriberAge(35);
+        e.setSpouseAge(34);
+        e.setChildAge(5);
+        e.setStatus(Enrollment.Status.COMPLETED);
+        e.setCreatedAt(LocalDateTime.of(2025, 1, 3, 10, 0));
+        service.save(e);
+        return "redirect:/dashboard";
+    }
+
+    @GetMapping("/status-report")
+    public String statusReport(@RequestParam(value = "status", required = false) Enrollment.Status status,
+                               @RequestParam(value = "user", required = false) String user,
+                               @RequestParam(value = "env", required = false) String env,
+                               @RequestParam(value = "completedFrom", required = false)
+                                   @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate completedFrom,
+                               @RequestParam(value = "completedTo", required = false)
+                                   @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate completedTo,
+                               @RequestParam(value = "minMinutes", required = false) Integer minMinutes,
+                               @RequestParam(value = "maxMinutes", required = false) Integer maxMinutes,
+                               @RequestParam(value = "page", required = false, defaultValue = "0") int page,
+                               @RequestParam(value = "size", required = false, defaultValue = "25") int size,
+                               Model model) {
+        // enforce max page size of 25
+        if (size > 25) size = 25;
+        if (size < 1) size = 1;
+        var pageResult = service.searchAdvanced(status, user, env, completedFrom, completedTo, minMinutes, maxMinutes, page, size)
+                .map(StatusReportRow::new);
+        DateTimeFormatter df = DateTimeFormatter.ISO_DATE;
+        model.addAttribute("fromStr", completedFrom != null ? df.format(completedFrom) : null);
+        model.addAttribute("toStr", completedTo != null ? df.format(completedTo) : null);
+        model.addAttribute("status", status);
+        model.addAttribute("user", user);
+        model.addAttribute("env", env);
+        model.addAttribute("minMinutes", minMinutes);
+        model.addAttribute("maxMinutes", maxMinutes);
+        model.addAttribute("rows", pageResult.getContent());
+        model.addAttribute("page", pageResult.getNumber());
+        model.addAttribute("size", pageResult.getSize());
+        model.addAttribute("totalPages", pageResult.getTotalPages());
+        model.addAttribute("totalElements", pageResult.getTotalElements());
+        return "status-report";
+    }
+
+    @PostMapping("/status-report/{id}/status")
+    public String updateStatus(@PathVariable("id") Long id,
+                               @RequestParam("status") Enrollment.Status newStatus,
+                               @RequestParam(value = "statusFilter", required = false) Enrollment.Status statusFilter,
+                               @RequestParam(value = "user", required = false) String user,
+                               @RequestParam(value = "env", required = false) String env,
+                               @RequestParam(value = "completedFrom", required = false) String fromStr,
+                               @RequestParam(value = "completedTo", required = false) String toStr,
+                               @RequestParam(value = "minMinutes", required = false) Integer minMinutes,
+                               @RequestParam(value = "maxMinutes", required = false) Integer maxMinutes,
+                               @RequestParam(value = "page", required = false, defaultValue = "0") int page,
+                               @RequestParam(value = "size", required = false, defaultValue = "25") int size) {
+        service.updateStatus(id, newStatus, null);
+        StringBuilder redirect = new StringBuilder("redirect:/status-report?");
+        if (statusFilter != null) redirect.append("status=").append(statusFilter.name()).append('&');
+        if (user != null && !user.isBlank()) redirect.append("user=").append(user).append('&');
+        if (env != null && !env.isBlank()) redirect.append("env=").append(env).append('&');
+        if (fromStr != null && !fromStr.isBlank()) redirect.append("completedFrom=").append(fromStr).append('&');
+        if (toStr != null && !toStr.isBlank()) redirect.append("completedTo=").append(toStr).append('&');
+        if (minMinutes != null) redirect.append("minMinutes=").append(minMinutes).append('&');
+        if (maxMinutes != null) redirect.append("maxMinutes=").append(maxMinutes).append('&');
+        redirect.append("page=").append(page).append('&');
+        redirect.append("size=").append(size);
+        return redirect.toString();
+    }
+
+    @GetMapping("/update-status")
+    public String updateStatusPage(@RequestParam(value = "status", required = false) Enrollment.Status status,
+                                   @RequestParam(value = "user", required = false) String user,
+                                   @RequestParam(value = "env", required = false) String env,
+                                   @RequestParam(value = "page", required = false, defaultValue = "0") int page,
+                                   @RequestParam(value = "size", required = false, defaultValue = "25") int size,
+                                   Model model) {
+        // enforce max page size of 25
+        if (size > 25) size = 25;
+        if (size < 1) size = 1;
+        
+        // Get enrollments with filtering and pagination
+        Page<Enrollment> pageResult;
+        if (status != null || (user != null && !user.isBlank()) || (env != null && !env.isBlank())) {
+            // Apply filters using searchAdvanced method
+            pageResult = service.searchAdvanced(status, user, env, null, null, null, null, page, size);
+        } else {
+            // Get all enrollments with pagination
+            pageResult = service.findAll(page, size);
+        }
+        
+        model.addAttribute("status", status);
+        model.addAttribute("user", user);
+        model.addAttribute("env", env);
+        model.addAttribute("enrollments", pageResult.getContent());
+        model.addAttribute("page", pageResult.getNumber());
+        model.addAttribute("size", pageResult.getSize());
+        model.addAttribute("totalPages", pageResult.getTotalPages());
+        model.addAttribute("totalElements", pageResult.getTotalElements());
+        return "update-status";
+    }
+
+    @PostMapping("/update-status/{id}/status")
+    public String updateStatusFromUpdatePage(@PathVariable("id") Long id,
+                                           @RequestParam("status") Enrollment.Status newStatus,
+                                           @RequestParam(value = "statusFilter", required = false) Enrollment.Status statusFilter,
+                                           @RequestParam(value = "user", required = false) String user,
+                                           @RequestParam(value = "env", required = false) String env,
+                                           @RequestParam(value = "page", required = false, defaultValue = "0") int page,
+                                           @RequestParam(value = "size", required = false, defaultValue = "25") int size) {
+        service.updateStatus(id, newStatus, null);
+        StringBuilder redirect = new StringBuilder("redirect:/update-status?");
+        if (statusFilter != null) redirect.append("status=").append(statusFilter.name()).append('&');
+        if (user != null && !user.isBlank()) redirect.append("user=").append(user).append('&');
+        if (env != null && !env.isBlank()) redirect.append("env=").append(env).append('&');
+        redirect.append("page=").append(page).append('&');
+        redirect.append("size=").append(size);
+        return redirect.toString();
+    }
+
+    @PostMapping("/update-status/{id}/priority")
+    public String updatePriorityFromUpdatePage(@PathVariable("id") Long id,
+                                             @RequestParam("priority") Integer priority,
+                                             @RequestParam(value = "statusFilter", required = false) Enrollment.Status statusFilter,
+                                             @RequestParam(value = "user", required = false) String user,
+                                             @RequestParam(value = "env", required = false) String env,
+                                             @RequestParam(value = "page", required = false, defaultValue = "0") int page,
+                                             @RequestParam(value = "size", required = false, defaultValue = "25") int size) {
+        service.updatePriority(id, priority);
+        StringBuilder redirect = new StringBuilder("redirect:/update-status?");
+        if (statusFilter != null) redirect.append("status=").append(statusFilter.name()).append('&');
+        if (user != null && !user.isBlank()) redirect.append("user=").append(user).append('&');
+        if (env != null && !env.isBlank()) redirect.append("env=").append(env).append('&');
+        redirect.append("page=").append(page).append('&');
+        redirect.append("size=").append(size);
+        return redirect.toString();
+    }
+
+    @PostMapping("/update-status/{id}/apply")
+    public String applyStatusAndPriority(@PathVariable("id") Long id,
+                                         @RequestParam(value = "status", required = false) Enrollment.Status newStatus,
+                                         @RequestParam(value = "priority", required = false) Integer priority,
+                                         @RequestParam(value = "failureReason", required = false) String failureReason,
+                                         @RequestParam(value = "statusFilter", required = false) Enrollment.Status statusFilter,
+                                         @RequestParam(value = "user", required = false) String user,
+                                         @RequestParam(value = "env", required = false) String env,
+                                         @RequestParam(value = "page", required = false, defaultValue = "0") int page,
+                                         @RequestParam(value = "size", required = false, defaultValue = "25") int size) {
+        service.updateStatusAndPriority(id, newStatus, priority, failureReason);
+        StringBuilder redirect = new StringBuilder("redirect:/update-status?");
+        if (statusFilter != null) redirect.append("status=").append(statusFilter.name()).append('&');
+        if (user != null && !user.isBlank()) redirect.append("user=").append(user).append('&');
+        if (env != null && !env.isBlank()) redirect.append("env=").append(env).append('&');
+        redirect.append("page=").append(page).append('&');
+        redirect.append("size=").append(size);
+        return redirect.toString();
+    }
+
+    @PostMapping("/update-status/bulk/status")
+    public String bulkUpdateStatus(@RequestParam("status") Enrollment.Status status,
+                                 @RequestParam("ids") List<Long> ids,
+                                 @RequestParam(value = "statusFilter", required = false) Enrollment.Status statusFilter,
+                                 @RequestParam(value = "user", required = false) String user,
+                                 @RequestParam(value = "env", required = false) String env,
+                                 @RequestParam(value = "page", required = false, defaultValue = "0") int page,
+                                 @RequestParam(value = "size", required = false, defaultValue = "25") int size) {
+        service.bulkUpdateStatus(ids, status);
+        StringBuilder redirect = new StringBuilder("redirect:/update-status?");
+        if (statusFilter != null) redirect.append("status=").append(statusFilter.name()).append('&');
+        if (user != null && !user.isBlank()) redirect.append("user=").append(user).append('&');
+        if (env != null && !env.isBlank()) redirect.append("env=").append(env).append('&');
+        redirect.append("page=").append(page).append('&');
+        redirect.append("size=").append(size);
+        return redirect.toString();
+    }
+
+    @GetMapping("/status-report/export")
+    public ResponseEntity<byte[]> exportStatusReportToExcel(
+            @RequestParam(value = "status", required = false) Enrollment.Status status,
+            @RequestParam(value = "from", required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(value = "to", required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        
+        // Set default date range if not provided
+        if (from == null) {
+            from = LocalDate.now().minusDays(90);
+        }
+        if (to == null) {
+            to = LocalDate.now();
+        }
+        
+        // Get all data without pagination for export
+        // For export, we want to search by creation date range, not completion date range
+        Page<Enrollment> allData = service.searchByCreationDate(status, from, to, PageRequest.of(0, Integer.MAX_VALUE));
+        List<StatusReportRow> rows = allData.getContent().stream()
+                .map(StatusReportRow::new)
+                .collect(java.util.stream.Collectors.toList());
+        
+        // Create Excel workbook
+        Workbook workbook = new XSSFWorkbook();
+        Sheet sheet = workbook.createSheet("Status Report");
+        
+        // Create header row
+        Row headerRow = sheet.createRow(0);
+        String[] headers = {"Created", "User", "Environment", "Status", "Completed At", "Time Taken", "Input", "Output", "Failure Reason"};
+        
+        CellStyle headerStyle = workbook.createCellStyle();
+        Font headerFont = workbook.createFont();
+        headerFont.setBold(true);
+        headerStyle.setFont(headerFont);
+        headerStyle.setFillForegroundColor(IndexedColors.GREY_25_PERCENT.getIndex());
+        headerStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+        
+        for (int i = 0; i < headers.length; i++) {
+            Cell cell = headerRow.createCell(i);
+            cell.setCellValue(headers[i]);
+            cell.setCellStyle(headerStyle);
+        }
+        
+        // Create data rows
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+        for (int i = 0; i < rows.size(); i++) {
+            StatusReportRow row = rows.get(i);
+            Row excelRow = sheet.createRow(i + 1);
+            
+            excelRow.createCell(0).setCellValue(row.getCreatedAt() != null ? row.getCreatedAt().format(formatter) : "");
+            excelRow.createCell(1).setCellValue(row.getUserId() != null ? row.getUserId() : "");
+            excelRow.createCell(2).setCellValue(row.getEnvironment() != null ? row.getEnvironment() : "");
+            excelRow.createCell(3).setCellValue(row.getStatus() != null ? row.getStatus().name() : "");
+            excelRow.createCell(4).setCellValue(row.getCompletedAt() != null ? row.getCompletedAt().format(formatter) : "");
+            excelRow.createCell(5).setCellValue(row.getTimeTaken() != null ? row.getTimeTaken() : "");
+            excelRow.createCell(6).setCellValue(row.getInputValue() != null ? row.getInputValue().toString() : "");
+            excelRow.createCell(7).setCellValue(row.getOutputValue() != null ? row.getOutputValue().toString() : "");
+            excelRow.createCell(8).setCellValue(row.getFailureReason() != null ? row.getFailureReason() : "");
+        }
+        
+        // Auto-size columns
+        for (int i = 0; i < headers.length; i++) {
+            sheet.autoSizeColumn(i);
+        }
+        
+        // Convert workbook to byte array
+        try {
+            java.io.ByteArrayOutputStream outputStream = new java.io.ByteArrayOutputStream();
+            workbook.write(outputStream);
+            workbook.close();
+            
+            byte[] excelBytes = outputStream.toByteArray();
+            
+            // Generate filename with timestamp
+            String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+            String filename = "status_report_" + timestamp + ".xlsx";
+            
+            HttpHeaders responseHeaders = new HttpHeaders();
+            responseHeaders.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+            responseHeaders.setContentDispositionFormData("attachment", filename);
+            
+            return ResponseEntity.ok()
+                    .headers(responseHeaders)
+                    .body(excelBytes);
+                    
+        } catch (Exception e) {
+            throw new RuntimeException("Error generating Excel file", e);
+        }
+    }
+}
+
+
