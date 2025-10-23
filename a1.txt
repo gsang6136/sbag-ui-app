@@ -1,0 +1,115 @@
+@PostMapping("/status-report/{id}/status")
+    public String updateStatus(@PathVariable("id") Long id,
+                               @RequestParam("status") Enrollment.Status newStatus,
+                               @RequestParam(value = "statusFilter", required = false) Enrollment.Status statusFilter,
+                               @RequestParam(value = "user", required = false) String user,
+                               @RequestParam(value = "env", required = false) String env,
+                               @RequestParam(value = "completedFrom", required = false) String fromStr,
+                               @RequestParam(value = "completedTo", required = false) String toStr,
+                               @RequestParam(value = "minMinutes", required = false) Integer minMinutes,
+                               @RequestParam(value = "maxMinutes", required = false) Integer maxMinutes,
+                               @RequestParam(value = "page", required = false, defaultValue = "0") int page,
+                               @RequestParam(value = "size", required = false, defaultValue = "25") int size) {
+        service.updateStatus(id, newStatus, null);
+        StringBuilder redirect = new StringBuilder("redirect:/status-report?");
+        if (statusFilter != null) redirect.append("status=").append(statusFilter.name()).append('&');
+        if (user != null && !user.isBlank()) redirect.append("user=").append(user).append('&');
+        if (env != null && !env.isBlank()) redirect.append("env=").append(env).append('&');
+        if (fromStr != null && !fromStr.isBlank()) redirect.append("completedFrom=").append(fromStr).append('&');
+        if (toStr != null && !toStr.isBlank()) redirect.append("completedTo=").append(toStr).append('&');
+        if (minMinutes != null) redirect.append("minMinutes=").append(minMinutes).append('&');
+        if (maxMinutes != null) redirect.append("maxMinutes=").append(maxMinutes).append('&');
+        redirect.append("page=").append(page).append('&');
+        redirect.append("size=").append(size);
+        return redirect.toString();
+    }
+
+    @GetMapping("/update-status")
+    public String updateStatusPage(@RequestParam(value = "status", required = false) Enrollment.Status status,
+                                   @RequestParam(value = "user", required = false) String user,
+                                   @RequestParam(value = "env", required = false) String env,
+                                   @RequestParam(value = "page", required = false, defaultValue = "0") int page,
+                                   @RequestParam(value = "size", required = false, defaultValue = "25") int size,
+                                   Model model) {
+        // enforce max page size of 25
+        if (size > 25) size = 25;
+        if (size < 1) size = 1;
+        
+        // Get enrollments with filtering and pagination
+        Page<Enrollment> pageResult;
+        if (status != null || (user != null && !user.isBlank()) || (env != null && !env.isBlank())) {
+            // Apply filters using searchAdvanced method
+            pageResult = service.searchAdvanced(status, user, env, null, null, null, null, page, size);
+        } else {
+            // Get all enrollments with pagination
+            pageResult = service.findAll(page, size);
+        }
+        
+        model.addAttribute("status", status);
+        model.addAttribute("user", user);
+        model.addAttribute("env", env);
+        model.addAttribute("enrollments", pageResult.getContent());
+        model.addAttribute("page", pageResult.getNumber());
+        model.addAttribute("size", pageResult.getSize());
+        model.addAttribute("totalPages", pageResult.getTotalPages());
+        model.addAttribute("totalElements", pageResult.getTotalElements());
+        return "update-status";
+    }
+
+    @PostMapping("/update-status/{id}/status")
+    public String updateStatusFromUpdatePage(@PathVariable("id") Long id,
+                                           @RequestParam("status") Enrollment.Status newStatus,
+                                           @RequestParam(value = "statusFilter", required = false) Enrollment.Status statusFilter,
+                                           @RequestParam(value = "user", required = false) String user,
+                                           @RequestParam(value = "env", required = false) String env,
+                                           @RequestParam(value = "page", required = false, defaultValue = "0") int page,
+                                           @RequestParam(value = "size", required = false, defaultValue = "25") int size) {
+        service.updateStatus(id, newStatus, null);
+        StringBuilder redirect = new StringBuilder("redirect:/update-status?");
+        if (statusFilter != null) redirect.append("status=").append(statusFilter.name()).append('&');
+        if (user != null && !user.isBlank()) redirect.append("user=").append(user).append('&');
+        if (env != null && !env.isBlank()) redirect.append("env=").append(env).append('&');
+        redirect.append("page=").append(page).append('&');
+        redirect.append("size=").append(size);
+        return redirect.toString();
+    }
+
+    @PostMapping("/update-status/{id}/priority")
+    public String updatePriorityFromUpdatePage(@PathVariable("id") Long id,
+                                             @RequestParam("priority") Integer priority,
+                                             @RequestParam(value = "statusFilter", required = false) Enrollment.Status statusFilter,
+                                             @RequestParam(value = "user", required = false) String user,
+                                             @RequestParam(value = "env", required = false) String env,
+                                             @RequestParam(value = "page", required = false, defaultValue = "0") int page,
+                                             @RequestParam(value = "size", required = false, defaultValue = "25") int size) {
+        service.updatePriority(id, priority);
+        StringBuilder redirect = new StringBuilder("redirect:/update-status?");
+        if (statusFilter != null) redirect.append("status=").append(statusFilter.name()).append('&');
+        if (user != null && !user.isBlank()) redirect.append("user=").append(user).append('&');
+        if (env != null && !env.isBlank()) redirect.append("env=").append(env).append('&');
+        redirect.append("page=").append(page).append('&');
+        redirect.append("size=").append(size);
+        return redirect.toString();
+    }
+
+    @PostMapping("/update-status/{id}/apply")
+    public String applyStatusAndPriority(@PathVariable("id") Long id,
+                                         @RequestParam(value = "status", required = false) Enrollment.Status newStatus,
+                                         @RequestParam(value = "priority", required = false) Integer priority,
+                                         @RequestParam(value = "failureReason", required = false) String failureReason,
+                                         @RequestParam(value = "statusFilter", required = false) Enrollment.Status statusFilter,
+                                         @RequestParam(value = "user", required = false) String user,
+                                         @RequestParam(value = "env", required = false) String env,
+                                         @RequestParam(value = "page", required = false, defaultValue = "0") int page,
+                                         @RequestParam(value = "size", required = false, defaultValue = "25") int size) {
+        service.updateStatusAndPriority(id, newStatus, priority, failureReason);
+        StringBuilder redirect = new StringBuilder("redirect:/update-status?");
+        if (statusFilter != null) redirect.append("status=").append(statusFilter.name()).append('&');
+        if (user != null && !user.isBlank()) redirect.append("user=").append(user).append('&');
+        if (env != null && !env.isBlank()) redirect.append("env=").append(env).append('&');
+        redirect.append("page=").append(page).append('&');
+        redirect.append("size=").append(size);
+        return redirect.toString();
+    }
+
+    @PostMapping("/update-status/bulk/status")
